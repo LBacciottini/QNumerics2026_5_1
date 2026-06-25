@@ -15,11 +15,14 @@ using Statistics
 # The `Store`s play the role of the repeater memories.  A link generator blocks when
 # its memory is full, and the repeater blocks when one side has no pair available.
 
-struct LinkEntanglement end
+abstract type MemoryContent end
+
+struct EmptyMemory <: MemoryContent end
+struct LinkEntanglement <: MemoryContent end
 
 mutable struct RepeaterStation
-    left_memory::Store{LinkEntanglement}
-    right_memory::Store{LinkEntanglement}
+    left_memory::Store{MemoryContent}
+    right_memory::Store{MemoryContent}
     # how many e2e pairs have been completed?
     completed_pairs::Int
     # At what times were the e2e pairs completed?
@@ -28,24 +31,35 @@ end
 
 function RepeaterStation(env::Environment; memory_size=1)
     RepeaterStation(
-        Store{LinkEntanglement}(env; capacity=memory_size),
-        Store{LinkEntanglement}(env; capacity=memory_size),
+        Store{MemoryContent}(env; capacity=memory_size),
+        Store{MemoryContent}(env; capacity=memory_size),
         0,
         Float64[],
     )
 end
 
+is_entanglement(content::MemoryContent) = false
+is_entanglement(content::LinkEntanglement) = true
+
+get_left(station::RepeaterStation) = get(station.left_memory, is_entanglement)
+get_right(station::RepeaterStation) = get(station.right_memory, is_entanglement)
+put_left!(station::RepeaterStation, content::MemoryContent) = put!(station.left_memory, content)
+put_right!(station::RepeaterStation, content::MemoryContent) = put!(station.right_memory, content)
+
 @resumable function entangler(
         env::Environment,
-        memory::Store{LinkEntanglement},
+        memory::Store{MemoryContent},
         success_probability::Float64,
         attempt_time::Float64,
     )
     attempts_until_success = Geometric(success_probability)
 
     while true
+        @yield put!(memory, EmptyMemory())
+
         attempts = rand(attempts_until_success) + 1
         @yield timeout(env, attempts * attempt_time)
+        @yield get(memory)
         @yield put!(memory, LinkEntanglement())
     end
 end
@@ -57,8 +71,8 @@ end
     )
 
     while true
-        left_request = get(station.left_memory)
-        right_request = get(station.right_memory)
+        left_request = get_left(station)
+        right_request = get_right(station)
 
         @yield left_request & right_request
 
@@ -148,4 +162,3 @@ println("Completed pairs: $(station.completed_pairs)")
 println("Mean time between pairs: $(round(mean(cycle_times(station)), sigdigits=4))")
 
 display(plot_repeater_run(station; simulation_time))
-
