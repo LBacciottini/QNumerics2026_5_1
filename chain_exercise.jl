@@ -7,14 +7,15 @@ using Statistics
 
 # # A repeater chain
 #
-# This builds on `repeater_exercise.jl`.  Each node has two memories:
-# one facing left and one facing right.  A memory contains either `EmptyMemory()`
-# or an `EntangledPair`.
+# This builds on `repeater_solution.jl`.  Each node has two memories:
+# one facing left and one facing right.  A memory can be empty-but-reserved while
+# entanglement generation is in progress, or it can contain an entangled pair.
 #
-# The new idea is that an entangled pair must remember the remote node it is
-# entangled with.  When a middle node swaps a left pair and a right pair, the
-# remote endpoints keep their qubits, but their stored metadata changes: they
-# are no longer entangled with the middle node, they are entangled with each other.
+# The important difference from the two-link repeater is that an entangled pair must
+# remember the remote node it is entangled with.  When a middle node swaps a left pair
+# and a right pair, the remote endpoints keep their qubits, but their stored metadata
+# changes: they are no longer entangled with the middle node, they are entangled with
+# each other.
 
 abstract type MemoryContent end
 
@@ -23,6 +24,9 @@ struct EmptyMemory <: MemoryContent end
 struct EntangledPair <: MemoryContent
     remote_node::Int
 end
+
+entangled_with(pair::MemoryContent) = nothing
+entangled_with(pair::EntangledPair) = pair.remote_node
 
 mutable struct ChainNode
     left_memory::Store{MemoryContent}
@@ -43,6 +47,7 @@ mutable struct RepeaterChain
     completed_pairs::Int
     completion_times::Vector{Float64}
 end
+nodes(chain::RepeaterChain) = chain.nodes
 
 function RepeaterChain(env::Environment, num_elementary_links::Int; memory_size=1)
     ispow2(num_elementary_links) ||
@@ -54,24 +59,32 @@ end
 
 is_entanglement(content::MemoryContent) = false
 is_entanglement(content::EntangledPair) = true
-is_empty_memory(content::MemoryContent) = content isa EmptyMemory
+is_empty_memory(content::MemoryContent) = false
+is_empty_memory(content::EmptyMemory) = true
 
 is_entangled_with(remote_node::Int) =
-    content -> content isa EntangledPair && content.remote_node == remote_node
+    content -> entangled_with(content) == remote_node
 
 function memory_toward(chain::RepeaterChain, node::Int, remote_node::Int)
-    remote_node < node && return chain.nodes[node].left_memory
-    remote_node > node && return chain.nodes[node].right_memory
+    "Get the memory of `node` that is facing toward `remote_node`."
+    remote_node < node && return nodes(chain)[node].left_memory
+    remote_node > node && return nodes(chain)[node].right_memory
     throw(ArgumentError("a node cannot be entangled with itself"))
 end
 
 get_left(chain::RepeaterChain, node::Int, remote_node::Int) =
-    get(chain.nodes[node].left_memory, is_entangled_with(remote_node))
+    get(nodes(chain)[node].left_memory, is_entangled_with(remote_node))
 
 get_right(chain::RepeaterChain, node::Int, remote_node::Int) =
-    get(chain.nodes[node].right_memory, is_entangled_with(remote_node))
+    get(nodes(chain)[node].right_memory, is_entangled_with(remote_node))
 
-@resumable function elementary_entangler(
+put_left!(chain::RepeaterChain, node::Int, content::MemoryContent) =
+    put!(nodes(chain)[node].left_memory, content)
+
+put_right!(chain::RepeaterChain, node::Int, content::MemoryContent) =
+    put!(nodes(chain)[node].right_memory, content)
+
+@resumable function entangler(
         env::Environment,
         chain::RepeaterChain,
         left_node::Int,
@@ -79,13 +92,11 @@ get_right(chain::RepeaterChain, node::Int, remote_node::Int) =
         attempt_time::Float64,
     )
     right_node = left_node + 1
-    left_memory = chain.nodes[left_node].right_memory
-    right_memory = chain.nodes[right_node].left_memory
+    left_memory = nodes(chain)[left_node].right_memory
+    right_memory = nodes(chain)[right_node].left_memory
     attempts_until_success = Geometric(success_probability)
 
     while true
-        # Claim the two empty memories, wait for elementary entanglement to succeed,
-        # then store reciprocal `EntangledPair` tokens at the two endpoints.
         ###############
         # Code here
         ###############
@@ -101,32 +112,27 @@ end
         swap_time::Float64,
     )
     while true
-        left_local_memory = chain.nodes[node].left_memory
-        right_local_memory = chain.nodes[node].right_memory
         left_remote_memory = memory_toward(chain, left_remote, node)
         right_remote_memory = memory_toward(chain, right_remote, node)
 
-        # Claim the two pairs to be swapped at `node`, also remove their matching
-        # records from the two remote endpoints, wait for the swap, then update
-        # the remote endpoints so they point to each other.
         ###############
         # Code here
         ###############
     end
 end
 
-@resumable function final_pair_collector(
+@resumable function final_pair_consumer(
         env::Environment,
         chain::RepeaterChain,
     )
-    final_memory = chain.nodes[1].right_memory
-    final_remote_node = length(chain.nodes)
+    final_memory = nodes(chain)[1].right_memory
+    final_remote_node = length(nodes(chain))
 
     while true
         final_request = get(final_memory, is_entangled_with(final_remote_node))
         @yield final_request
 
-        far_end_memory = chain.nodes[final_remote_node].left_memory
+        far_end_memory = nodes(chain)[final_remote_node].left_memory
         @yield get(far_end_memory, is_entangled_with(1))
 
         chain.completed_pairs += 1
@@ -144,7 +150,7 @@ function start_chain_processes!(
         swap_time::Float64,
     )
     for left_node in 1:chain.num_elementary_links
-        @process elementary_entangler(
+        @process entangler(
             env,
             chain,
             left_node,
@@ -166,14 +172,14 @@ function start_chain_processes!(
         segment_length *= 2
     end
 
-    @process final_pair_collector(env, chain)
+    @process final_pair_consumer(env, chain)
     chain
 end
 
 function run_chain(;
         simulation_time=1_000.0,
         num_elementary_links=4,
-        success_probability=0.2,
+        success_probability=1.0,
         attempt_time=1.0,
         swap_time=1.0,
         memory_size=1,
@@ -241,7 +247,7 @@ end
 function sweep_chain_length(;
         num_elementary_links_values=(1, 2, 4, 8),
         simulation_time=1_000.0,
-        success_probability=0.2,
+        success_probability=1.0,
         attempt_time=1.0,
         swap_time=1.0,
         memory_size=1,
