@@ -1,2 +1,3 @@
 /Manifest*.toml
 /.agents
+src/scratch.jl
