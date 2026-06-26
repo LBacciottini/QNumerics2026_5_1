@@ -15,11 +15,14 @@ using Statistics
 # The `Store`s play the role of the repeater memories.  A link generator blocks when
 # its memory is full, and the repeater blocks when one side has no pair available.
 
-struct LinkEntanglement end
+abstract type MemoryContent end
+
+struct EmptyMemory <: MemoryContent end
+struct LinkEntanglement <: MemoryContent end
 
 mutable struct RepeaterStation
-    left_memory::Store{LinkEntanglement}
-    right_memory::Store{LinkEntanglement}
+    left_memory::Store{MemoryContent}
+    right_memory::Store{MemoryContent}
     # how many e2e pairs have been completed?
     completed_pairs::Int
     # At what times were the e2e pairs completed?
@@ -28,8 +31,8 @@ end
 
 function RepeaterStation(env::Environment; memory_size=1)
     RepeaterStation(
-        Store{LinkEntanglement}(env; capacity=memory_size),
-        Store{LinkEntanglement}(env; capacity=memory_size),
+        Store{MemoryContent}(env; capacity=memory_size),
+        Store{MemoryContent}(env; capacity=memory_size),
         0,
         Float64[],
     )
@@ -37,7 +40,7 @@ end
 
 @resumable function entangler(
         env::Environment,
-        memory::Store{LinkEntanglement},
+        memory::Store{MemoryContent},
         success_probability::Float64,
         attempt_time::Float64,
     )
