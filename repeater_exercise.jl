@@ -38,22 +38,13 @@ function RepeaterStation(env::Environment; memory_size=1)
     )
 end
 
-is_entanglement(content::MemoryContent) = false
-is_entanglement(content::LinkEntanglement) = true
-
-get_left(station::RepeaterStation) = get(station.left_memory, is_entanglement)
-get_right(station::RepeaterStation) = get(station.right_memory, is_entanglement)
-put_left!(station::RepeaterStation, content::MemoryContent) = put!(station.left_memory, content)
-put_right!(station::RepeaterStation, content::MemoryContent) = put!(station.right_memory, content)
-
 @resumable function entangler(
         env::Environment,
         memory::Store{MemoryContent},
         success_probability::Float64,
         attempt_time::Float64,
     )
-    # Repeatedly reserve this memory with `EmptyMemory()`, wait until elementary
-    # entanglement succeeds, clear the reservation, and store `LinkEntanglement()`.
+    # attempt entanglement until success, repeat forever.
     ###############
     # Code here
     ###############
@@ -64,8 +55,7 @@ end
         station::RepeaterStation,
         swap_time::Float64,
     )
-    # Repeatedly wait for a left and a right `LinkEntanglement`, perform a swap,
-    # and record the resulting end-to-end pair.
+    # wait for a left and a right entanglement, then swap them into an end-to-end pair. Repeat forever.
     ###############
     # Code here
     ###############
@@ -149,3 +139,4 @@ println("Completed pairs: $(station.completed_pairs)")
 println("Mean time between pairs: $(round(mean(cycle_times(station)), sigdigits=4))")
 
 display(plot_repeater_run(station; simulation_time))
+
